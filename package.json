@@ -1,0 +1,31 @@
+{
+  "name": "claudeboard",
+  "version": "1.0.0",
+  "description": "Local web dashboard for browsing Claude Code sessions, plans, memories, and configs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joselogil/claudeboard.git"
+  },
+  "homepage": "https://github.com/joselogil/claudeboard#readme",
+  "bugs": {
+    "url": "https://github.com/joselogil/claudeboard/issues"
+  },
+  "keywords": ["claude", "claude-code", "dashboard", "sessions", "plans", "memories"],
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2",
+    "vitest": "^4.1.4"
+  }
+}
