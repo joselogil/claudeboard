@@ -137,6 +137,53 @@ function createApp() {
     res.json({ ok: true, tags: sanitized });
   });
 
+  app.get('/api/notes', (req, res) => {
+    const { q, limit } = req.query;
+    let notes = scanner.parseNotes();
+    if (q) {
+      const lq = q.toLowerCase();
+      notes = notes.filter(n =>
+        n.heading.toLowerCase().includes(lq) ||
+        n.name.toLowerCase().includes(lq) ||
+        n.body.toLowerCase().includes(lq)
+      );
+    }
+    if (limit) notes = notes.slice(0, Number(limit));
+    res.json(notes.map(n => ({
+      name: n.name,
+      heading: n.heading,
+      date: n.date,
+      promoted: n.promoted,
+      size: n.size,
+      mtime: n.mtime,
+    })));
+  });
+
+  app.get('/api/notes/:name', (req, res) => {
+    const { name } = req.params;
+    if (name.includes('/') || name.includes('..') || !name.endsWith('.md')) {
+      return res.status(400).json({ error: 'Invalid note name' });
+    }
+    const notes = scanner.parseNotes();
+    const note = notes.find(n => n.name === name);
+    if (!note) return res.status(404).json({ error: 'Not found' });
+    res.json(note);
+  });
+
+  app.patch('/api/notes/:name/promote', (req, res) => {
+    const { name } = req.params;
+    if (name.includes('/') || name.includes('..') || !name.endsWith('.md')) {
+      return res.status(400).json({ error: 'Invalid note name' });
+    }
+    const filePath = path.join(CLAUDE_DIR, 'notes', name);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const { frontmatter, body } = scanner.parseFrontmatter(raw);
+    const newPromoted = !(frontmatter.promoted === 'true');
+    fs.writeFileSync(filePath, `---\ndate: ${frontmatter.date || '""'}\npromoted: ${newPromoted}\n---\n${body}`);
+    res.json({ ok: true, promoted: newPromoted });
+  });
+
   app.get('/api/memories', (req, res) => {
     const { q } = req.query;
     let memories = scanner.parseMemories();
@@ -251,6 +298,17 @@ function createApp() {
       return res.status(400).json({ error: 'Invalid plan name' });
     }
     const filePath = path.join(CLAUDE_DIR, 'plans', name);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
+    trashFile(filePath, filePath);
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/notes/:name', (req, res) => {
+    const { name } = req.params;
+    if (name.includes('/') || name.includes('..') || !name.endsWith('.md')) {
+      return res.status(400).json({ error: 'Invalid note name' });
+    }
+    const filePath = path.join(CLAUDE_DIR, 'notes', name);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
     trashFile(filePath, filePath);
     res.json({ ok: true });

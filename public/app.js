@@ -115,6 +115,7 @@ api.get('/meta').then(meta => { _homedir = meta.homedir || null; });
 function updateSidebarCounts(stats) {
   document.getElementById('cnt-sessions').textContent = stats.conversations.toLocaleString();
   document.getElementById('cnt-plans').textContent = stats.plans;
+  document.getElementById('cnt-notes').textContent = stats.notes || '';
   document.getElementById('cnt-memories').textContent = stats.memories;
   document.getElementById('cnt-tasks').textContent = stats.todos.toLocaleString();
   document.getElementById('cnt-plugins').textContent = stats.plugins;
@@ -635,6 +636,151 @@ function openTagEditor(tagArea) {
   });
 
   input.focus();
+}
+
+// Notes view
+let noteQ = '';
+
+views.notes = async function(container) {
+  noteQ = '';
+  await renderNotes(container);
+};
+
+async function renderNotes(container) {
+  try {
+    const params = noteQ ? '?q=' + encodeURIComponent(noteQ) : '';
+    const notes = await api.get('/notes' + params);
+
+    container.innerHTML = `
+      <div class="section-header">
+        <h2>Notes</h2>
+        <p>${notes.length} note${notes.length !== 1 ? 's' : ''}${noteQ ? ' matching "' + escHtml(noteQ) + '"' : ''}</p>
+      </div>
+      <div class="search-bar">
+        <input type="text" id="notes-search" placeholder="Search title, content..." value="${escHtml(noteQ)}">
+        <button id="notes-search-btn">Search</button>
+        <button id="notes-clear-btn">Clear</button>
+      </div>
+      <div class="plans-grid">
+        ${notes.map(n => `
+          <div class="plan-card" data-name="${escHtml(n.name)}">
+            <div class="plan-card-header">
+              <div>
+                <div class="plan-name">${escHtml(n.name)}</div>
+                <div class="plan-heading">${escHtml(n.heading)}</div>
+              </div>
+              <button class="btn-delete" data-delete-note="${escHtml(n.name)}" title="Move to trash">Trash</button>
+            </div>
+            <div class="plan-footer">
+              <span class="plan-meta">${fmtBytes(n.size)} · ${n.date || shortDate(n.mtime)}</span>
+              <button class="btn-note-promote ${n.promoted ? 'note-promoted' : ''}"
+                      data-note-name="${escHtml(n.name)}"
+                      title="${n.promoted ? 'Unpin note' : 'Pin note'}">
+                ${n.promoted ? 'Pinned' : 'Pin'}
+              </button>
+            </div>
+          </div>
+        `).join('') || '<div class="empty">No notes found</div>'}
+      </div>
+    `;
+
+    document.getElementById('notes-search-btn').onclick = () => {
+      noteQ = document.getElementById('notes-search').value.trim();
+      renderNotes(container);
+    };
+    document.getElementById('notes-search').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('notes-search-btn').click();
+    });
+    document.getElementById('notes-clear-btn').onclick = () => {
+      noteQ = '';
+      renderNotes(container);
+    };
+
+    container.querySelectorAll('.plan-card').forEach(card => {
+      card.addEventListener('click', e => {
+        if (e.target.closest('.btn-delete') || e.target.closest('.btn-note-promote')) return;
+        openNoteModal(card.dataset.name);
+      });
+    });
+
+    container.querySelectorAll('[data-delete-note]').forEach(btn => {
+      btn.addEventListener('click', async e => {
+        e.stopPropagation();
+        const name = btn.dataset.deleteNote;
+        const result = await api.delete('/notes/' + encodeURIComponent(name));
+        if (result.ok) {
+          btn.closest('.plan-card').remove();
+          await refreshSidebarStats();
+        } else {
+          alert('Failed: ' + (result.error || 'unknown error'));
+        }
+      });
+    });
+
+    container.querySelectorAll('.btn-note-promote').forEach(btn => {
+      btn.addEventListener('click', async e => {
+        e.stopPropagation();
+        const name = btn.dataset.noteName;
+        const r = await fetch('/api/notes/' + encodeURIComponent(name) + '/promote', { method: 'PATCH' });
+        const result = await r.json();
+        if (result.ok) {
+          await renderNotes(container);
+        } else {
+          alert('Pin failed: ' + (result.error || 'unknown error'));
+        }
+      });
+    });
+  } catch (err) {
+    showError(container, err.message);
+  }
+}
+
+async function openNoteModal(name) {
+  try {
+    openModal('<div class="loading">Loading note...</div>');
+    const note = await api.get('/notes/' + encodeURIComponent(name));
+    openModal(`
+      <div class="conv-modal-header">
+        <div>
+          <h3>${escHtml(note.heading)}</h3>
+          <p class="modal-sub">${escHtml(note.name)} · ${fmtBytes(note.size)} · ${note.date || shortDate(note.mtime)}</p>
+        </div>
+        <div class="conv-resume-block">
+          <button class="btn-note-promote-modal ${note.promoted ? 'note-promoted' : ''}"
+                  data-note-name="${escHtml(note.name)}"
+                  title="${note.promoted ? 'Unpin note' : 'Pin note'}">
+            ${note.promoted ? 'Pinned' : 'Pin'}
+          </button>
+          <button class="btn-delete btn-delete-note-modal" title="Move to trash">Trash</button>
+        </div>
+      </div>
+      <div class="md-content">${renderMd(note.body)}</div>
+    `);
+
+    modalContent.querySelector('.btn-note-promote-modal').addEventListener('click', async () => {
+      const el = modalContent.querySelector('.btn-note-promote-modal');
+      const r = await fetch('/api/notes/' + encodeURIComponent(name) + '/promote', { method: 'PATCH' });
+      const result = await r.json();
+      if (result.ok) {
+        el.textContent = result.promoted ? 'Pinned' : 'Pin';
+        el.classList.toggle('note-promoted', result.promoted);
+        el.title = result.promoted ? 'Unpin note' : 'Pin note';
+      }
+    });
+
+    modalContent.querySelector('.btn-delete-note-modal').addEventListener('click', async () => {
+      const result = await api.delete('/notes/' + encodeURIComponent(name));
+      if (result.ok) {
+        closeModal();
+        document.querySelector(`.plan-card[data-name="${CSS.escape(name)}"]`)?.remove();
+        await refreshSidebarStats();
+      } else {
+        alert('Failed: ' + (result.error || 'unknown error'));
+      }
+    });
+  } catch (err) {
+    openModal(errorHtml(err.message));
+  }
 }
 
 // Memories view

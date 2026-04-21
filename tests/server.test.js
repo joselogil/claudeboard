@@ -4,6 +4,7 @@ const request = require('supertest');
 
 const {
   pluginFixture,
+  noteFixture,
   setupServer,
   teardownServer,
 } = require('./helpers');
@@ -35,6 +36,7 @@ describe('server API', () => {
       expect(res.body.conversations).toBe(2);
       expect(res.body.plans).toBe(3);
       expect(res.body.memories).toBe(3);
+      expect(res.body.notes).toBeDefined();
     });
   });
 
@@ -300,6 +302,135 @@ describe('server API', () => {
       fs.writeFileSync(randomFile, 'secret');
       const res = await request(app).get(`/api/configs/content?file=${encodeURIComponent(randomFile)}`);
       expect(res.status).toBe(403);
+    });
+  });
+});
+
+describe('notes API', () => {
+  let fixture, app, CLAUDE_DIR, TRASH_DIR;
+
+  beforeEach(() => {
+    ({ fixture, app, CLAUDE_DIR, TRASH_DIR } = setupServer('notes-api', [noteFixture]));
+  });
+
+  afterEach(() => {
+    teardownServer(fixture);
+  });
+
+  describe('GET /api/notes', () => {
+    test('returns note summaries without body or content', async () => {
+      const res = await request(app).get('/api/notes');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBe(3);
+      for (const n of res.body) {
+        expect(n.name).toBeDefined();
+        expect(n.heading).toBeDefined();
+        expect(n.date).toBeDefined();
+        expect(typeof n.promoted).toBe('boolean');
+        expect(n.body).toBeUndefined();
+        expect(n.content).toBeUndefined();
+      }
+    });
+
+    test('promoted notes appear first', async () => {
+      const res = await request(app).get('/api/notes');
+      expect(res.status).toBe(200);
+      expect(res.body[0].promoted).toBe(true);
+    });
+
+    test('searches notes by body content', async () => {
+      const res = await request(app).get('/api/notes?q=xyzzy');
+      expect(res.status).toBe(200);
+      expect(res.body.length).toBe(1);
+      expect(res.body[0].name).toBe('note-two.md');
+    });
+
+    test('returns empty array when no notes match', async () => {
+      const res = await request(app).get('/api/notes?q=noresultsever');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([]);
+    });
+  });
+
+  describe('GET /api/notes/:name', () => {
+    test('returns full note including body', async () => {
+      const res = await request(app).get('/api/notes/note-one.md');
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('note-one.md');
+      expect(res.body.body).toContain('Body content of note one');
+      expect(res.body.promoted).toBe(false);
+    });
+
+    test('returns 404 for non-existent note', async () => {
+      const res = await request(app).get('/api/notes/nonexistent.md');
+      expect(res.status).toBe(404);
+    });
+
+    test('rejects path traversal', async () => {
+      const res = await request(app).get('/api/notes/..%252F..%252Fetc%252Fpasswd.md');
+      expect(res.status).toBe(400);
+    });
+
+    test('rejects non-.md filenames', async () => {
+      const res = await request(app).get('/api/notes/settings.json');
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('PATCH /api/notes/:name/promote', () => {
+    test('toggles promoted from false to true', async () => {
+      const res = await request(app).patch('/api/notes/note-one.md/promote');
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.promoted).toBe(true);
+      const fileContent = fs.readFileSync(path.join(CLAUDE_DIR, 'notes/note-one.md'), 'utf8');
+      expect(fileContent).toContain('promoted: true');
+    });
+
+    test('toggles promoted from true to false', async () => {
+      const res = await request(app).patch('/api/notes/note-two.md/promote');
+      expect(res.status).toBe(200);
+      expect(res.body.promoted).toBe(false);
+    });
+
+    test('rejects path traversal', async () => {
+      const res = await request(app).patch('/api/notes/..%252F..%252Fetc.md/promote');
+      expect(res.status).toBe(400);
+    });
+
+    test('returns 404 for non-existent note', async () => {
+      const res = await request(app).patch('/api/notes/nope.md/promote');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('DELETE /api/notes/:name (trash)', () => {
+    test('moves note to trash with meta sidecar', async () => {
+      const notePath = path.join(CLAUDE_DIR, 'notes/note-one.md');
+      const res = await request(app).delete('/api/notes/note-one.md');
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(fs.existsSync(notePath)).toBe(false);
+
+      const allTrashFiles = fs.readdirSync(TRASH_DIR);
+      const trashFiles = allTrashFiles.filter(f => !f.endsWith('.meta.json'));
+      const metaFiles = allTrashFiles.filter(f => f.endsWith('.meta.json'));
+      expect(trashFiles.length).toBe(1);
+      expect(metaFiles.length).toBe(1);
+
+      const meta = JSON.parse(fs.readFileSync(path.join(TRASH_DIR, metaFiles[0]), 'utf8'));
+      expect(meta.originalPath).toBe(notePath);
+    });
+
+    test('rejects invalid note names', async () => {
+      const res = await request(app).delete('/api/notes/..%2F..%2Fetc%2Fpasswd.md');
+      expect(res.status).toBe(400);
+    });
+
+    test('returns 404 for non-existent note', async () => {
+      const res = await request(app).delete('/api/notes/nonexistent.md');
+      expect(res.status).toBe(404);
     });
   });
 });

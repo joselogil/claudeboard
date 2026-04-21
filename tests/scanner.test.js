@@ -15,6 +15,7 @@ const {
   planFixture,
   memoryFixture,
   todoFixture,
+  noteFixture,
   pluginFixture,
   orphanedProjectFixture,
   hyphenProjectFixture,
@@ -286,6 +287,69 @@ describe('scanner', () => {
     });
   });
 
+  describe('parseNotes', () => {
+    let notes;
+
+    beforeEach(() => {
+      fixture = createFixture('notes', noteFixture);
+      scanner = loadScanner(fixture.claudeDir);
+      notes = scanner.parseNotes();
+    });
+
+    test('returns all note files', () => {
+      expect(notes.length).toBe(3);
+    });
+
+    test('includes name, heading, date, promoted, size, mtime, body', () => {
+      for (const n of notes) {
+        expect(typeof n.name).toBe('string');
+        expect(typeof n.heading).toBe('string');
+        expect(typeof n.date).toBe('string');
+        expect(typeof n.promoted).toBe('boolean');
+        expect(typeof n.size).toBe('number');
+        expect(typeof n.mtime).toBe('string');
+        expect(typeof n.body).toBe('string');
+      }
+    });
+
+    test('strips quotes from the date field', () => {
+      const n = notes.find(n => n.name === 'note-one.md');
+      expect(n.date).toBe('2026-04-20 10:00');
+      expect(n.date).not.toMatch(/^"/);
+    });
+
+    test('parses promoted as boolean', () => {
+      const promoted = notes.find(n => n.name === 'note-two.md');
+      const unpromoted = notes.find(n => n.name === 'note-one.md');
+      expect(promoted.promoted).toBe(true);
+      expect(unpromoted.promoted).toBe(false);
+    });
+
+    test('sorts promoted notes first, then by mtime descending', () => {
+      expect(notes[0].promoted).toBe(true);
+      expect(notes[1].mtime >= notes[2].mtime).toBe(true);
+    });
+
+    test('extracts ## style headings', () => {
+      const n = notes.find(n => n.name === 'note-one.md');
+      expect(n.heading).toBe('First note heading');
+    });
+
+    test('body excludes frontmatter block', () => {
+      const n = notes.find(n => n.name === 'note-one.md');
+      expect(n.body).toContain('Body content of note one');
+      expect(n.body).not.toContain('date:');
+      expect(n.body).not.toContain('promoted:');
+    });
+
+    test('returns empty array when notes dir does not exist', () => {
+      fixture.cleanup();
+      fixture = createFixture('notes-empty', () => {});
+      scanner = loadScanner(fixture.claudeDir);
+      expect(scanner.parseNotes()).toEqual([]);
+    });
+  });
+
   describe('getStats', () => {
     test('returns aggregate statistics', () => {
       fixture = createFixture('stats', (...args) => {
@@ -293,6 +357,7 @@ describe('scanner', () => {
         planFixture(...args);
         memoryFixture(...args);
         todoFixture(...args);
+        noteFixture(...args);
       });
       scanner = loadScanner(fixture.claudeDir);
       scanner.resetCache();
@@ -301,6 +366,7 @@ describe('scanner', () => {
       expect(stats.plans).toBe(3);
       expect(stats.memories).toBe(3);
       expect(stats.todos).toBe(5);
+      expect(stats.notes).toBe(3);
       expect(stats.recent.length).toBeLessThanOrEqual(10);
     });
   });

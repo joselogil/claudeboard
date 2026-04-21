@@ -180,6 +180,41 @@ function todoFixture({ writeJson }) {
 }
 
 /**
+ * Creates a fixture with note files.
+ */
+function noteFixture({ write }) {
+  write('notes/note-one.md', `---
+date: "2026-04-20 10:00"
+promoted: false
+---
+
+## First note heading
+
+Body content of note one. Good for searching.
+`);
+
+  write('notes/note-two.md', `---
+date: "2026-04-21 09:00"
+promoted: true
+---
+
+## Promoted note heading
+
+This note is pinned. Unique search term: xyzzy.
+`);
+
+  write('notes/note-three.md', `---
+date: "2026-04-19 08:00"
+promoted: false
+---
+
+## Note without unique content
+
+Regular body text.
+`);
+}
+
+/**
  * Creates a fixture with plugin data.
  */
 function pluginFixture({ writeJson }) {
@@ -291,6 +326,7 @@ module.exports = {
   planFixture,
   memoryFixture,
   todoFixture,
+  noteFixture,
   pluginFixture,
   orphanedProjectFixture,
   hyphenProjectFixture,
