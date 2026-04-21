@@ -640,27 +640,46 @@ function openTagEditor(tagArea) {
 
 // Notes view
 let noteQ = '';
+let noteTag = '';
 
 views.notes = async function(container) {
   noteQ = '';
+  noteTag = '';
   await renderNotes(container);
 };
 
 async function renderNotes(container) {
   try {
-    const params = noteQ ? '?q=' + encodeURIComponent(noteQ) : '';
-    const notes = await api.get('/notes' + params);
+    const allTags = await api.get('/notes/tags');
+    const params = new URLSearchParams();
+    if (noteQ) params.set('q', noteQ);
+    if (noteTag) params.set('tag', noteTag);
+    const qs = params.toString();
+    const notes = await api.get('/notes' + (qs ? '?' + qs : ''));
+
+    const tagFilterHtml = allTags.length > 0 ? `
+      <div class="tag-filter-bar">
+        <span class="tag-filter-label">Filter:</span>
+        <button class="tag-filter-chip ${!noteTag ? 'active' : ''}" data-filter-tag="">All</button>
+        ${allTags.map(({ tag, count }) => `
+          <button class="tag-filter-chip ${noteTag === tag ? 'active' : ''}" data-filter-tag="${escHtml(tag)}">
+            ${escHtml(tag)} <span class="tag-count">${count}</span>
+          </button>
+        `).join('')}
+      </div>
+    ` : '';
 
     container.innerHTML = `
       <div class="section-header">
         <h2>Notes</h2>
-        <p>${notes.length} note${notes.length !== 1 ? 's' : ''}${noteQ ? ' matching "' + escHtml(noteQ) + '"' : ''}</p>
+        <p>${notes.length} note${notes.length !== 1 ? 's' : ''}${noteQ ? ' matching "' + escHtml(noteQ) + '"' : ''}${noteTag ? ' tagged "' + escHtml(noteTag) + '"' : ''}</p>
       </div>
       <div class="search-bar">
-        <input type="text" id="notes-search" placeholder="Search title, content..." value="${escHtml(noteQ)}">
+        <input type="text" id="notes-search" placeholder="Search title, content, tags..." value="${escHtml(noteQ)}">
         <button id="notes-search-btn">Search</button>
         <button id="notes-clear-btn">Clear</button>
       </div>
+      ${tagFilterHtml}
       <div class="plans-grid">
         ${notes.map(n => `
           <div class="plan-card" data-name="${escHtml(n.name)}">
@@ -670,6 +689,9 @@ async function renderNotes(container) {
                 <div class="plan-heading">${escHtml(n.heading)}</div>
               </div>
               <button class="btn-delete" data-delete-note="${escHtml(n.name)}" title="Move to trash">Trash</button>
+            </div>
+            <div class="plan-tags" data-note-name="${escHtml(n.name)}" data-tags="${escHtml(JSON.stringify(n.tags))}">
+              ${renderTagChips(n.tags, n.name)}
             </div>
             <div class="plan-footer">
               <span class="plan-meta">${fmtBytes(n.size)} · ${n.date || shortDate(n.mtime)}</span>
@@ -693,12 +715,20 @@ async function renderNotes(container) {
     });
     document.getElementById('notes-clear-btn').onclick = () => {
       noteQ = '';
+      noteTag = '';
       renderNotes(container);
     };
 
+    container.querySelectorAll('[data-filter-tag]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        noteTag = btn.dataset.filterTag;
+        renderNotes(container);
+      });
+    });
+
     container.querySelectorAll('.plan-card').forEach(card => {
       card.addEventListener('click', e => {
-        if (e.target.closest('.btn-delete') || e.target.closest('.btn-note-promote')) return;
+        if (e.target.closest('.btn-delete') || e.target.closest('.btn-note-promote') || e.target.closest('.plan-tags')) return;
         openNoteModal(card.dataset.name);
       });
     });
@@ -730,24 +760,105 @@ async function renderNotes(container) {
         }
       });
     });
+
+    container.querySelectorAll('.plan-tags[data-note-name]').forEach(tagArea => {
+      tagArea.addEventListener('click', e => {
+        e.stopPropagation();
+        openNoteTagEditor(tagArea, container);
+      });
+    });
   } catch (err) {
     showError(container, err.message);
   }
+}
+
+function openNoteTagEditor(tagArea, container) {
+  const noteName = tagArea.dataset.noteName;
+  const currentTags = JSON.parse(tagArea.dataset.tags || '[]');
+
+  const editor = document.createElement('div');
+  editor.className = 'tag-editor';
+  editor.innerHTML = `
+    <div class="tag-editor-chips">
+      ${currentTags.map(t => `<span class="tag-editor-chip">${escHtml(t)}<button class="tag-remove" data-tag="${escHtml(t)}">&times;</button></span>`).join('')}
+    </div>
+    <input class="tag-editor-input" type="text" placeholder="add tag, press Enter" autocomplete="off">
+    <div class="tag-editor-actions">
+      <button class="tag-save-btn">Save</button>
+      <button class="tag-cancel-btn">Cancel</button>
+    </div>
+  `;
+
+  tagArea.innerHTML = '';
+  tagArea.appendChild(editor);
+
+  const input = editor.querySelector('.tag-editor-input');
+  const chips = editor.querySelector('.tag-editor-chips');
+  let tags = [...currentTags];
+
+  function refreshChips() {
+    chips.innerHTML = tags.map(t =>
+      `<span class="tag-editor-chip">${escHtml(t)}<button class="tag-remove" data-tag="${escHtml(t)}">&times;</button></span>`
+    ).join('');
+    chips.querySelectorAll('.tag-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        tags = tags.filter(t => t !== btn.dataset.tag);
+        refreshChips();
+      });
+    });
+  }
+  refreshChips();
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      const val = input.value.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      if (val && !tags.includes(val)) { tags.push(val); refreshChips(); }
+      input.value = '';
+    }
+    if (e.key === 'Escape') editor.querySelector('.tag-cancel-btn').click();
+  });
+
+  editor.querySelector('.tag-save-btn').addEventListener('click', async () => {
+    const r = await fetch('/api/notes/' + encodeURIComponent(noteName) + '/tags', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags }),
+    });
+    const result = await r.json();
+    if (result.ok) {
+      tagArea.dataset.tags = JSON.stringify(result.tags);
+      tagArea.innerHTML = renderTagChips(result.tags, noteName);
+      tagArea.onclick = e => { e.stopPropagation(); openNoteTagEditor(tagArea, container); };
+    } else {
+      alert('Save failed: ' + result.error);
+    }
+  });
+
+  editor.querySelector('.tag-cancel-btn').addEventListener('click', () => {
+    tagArea.innerHTML = renderTagChips(currentTags, noteName);
+    tagArea.onclick = e => { e.stopPropagation(); openNoteTagEditor(tagArea, container); };
+  });
+
+  input.focus();
 }
 
 async function openNoteModal(name) {
   try {
     openModal('<div class="loading">Loading note...</div>');
     const note = await api.get('/notes/' + encodeURIComponent(name));
+    const notePath = `~/.claude/notes/${note.name}`;
     openModal(`
       <div class="conv-modal-header">
         <div>
           <h3>${escHtml(note.heading)}</h3>
           <p class="modal-sub">${escHtml(note.name)} · ${fmtBytes(note.size)} · ${note.date || shortDate(note.mtime)}</p>
+          ${note.tags.length > 0 ? `<div class="modal-tags">${note.tags.map(t => `<span class="plan-tag">${escHtml(t)}</span>`).join('')}</div>` : ''}
         </div>
         <div class="conv-resume-block">
+          <code class="resume-cmd">${escHtml(notePath)}</code>
+          <button class="btn-copy-note-path" title="Copy path to paste into Claude">Copy path</button>
           <button class="btn-note-promote-modal ${note.promoted ? 'note-promoted' : ''}"
-                  data-note-name="${escHtml(note.name)}"
                   title="${note.promoted ? 'Unpin note' : 'Pin note'}">
             ${note.promoted ? 'Pinned' : 'Pin'}
           </button>
@@ -756,6 +867,10 @@ async function openNoteModal(name) {
       </div>
       <div class="md-content">${renderMd(note.body)}</div>
     `);
+
+    modalContent.querySelector('.btn-copy-note-path').addEventListener('click', e => {
+      copyText(notePath, e.target);
+    });
 
     modalContent.querySelector('.btn-note-promote-modal').addEventListener('click', async () => {
       const el = modalContent.querySelector('.btn-note-promote-modal');

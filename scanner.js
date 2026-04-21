@@ -179,6 +179,7 @@ function parseNotes() {
         heading: headingMatch ? headingMatch[1] : f,
         date,
         promoted: frontmatter.promoted === 'true',
+        tags: parseTags(frontmatter.tags),
         size: stat.size,
         mtime: stat.mtime.toISOString(),
         body,

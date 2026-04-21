@@ -138,14 +138,18 @@ function createApp() {
   });
 
   app.get('/api/notes', (req, res) => {
-    const { q, limit } = req.query;
+    const { q, tag, limit } = req.query;
     let notes = scanner.parseNotes();
+    if (tag) {
+      notes = notes.filter(n => n.tags.includes(tag));
+    }
     if (q) {
       const lq = q.toLowerCase();
       notes = notes.filter(n =>
         n.heading.toLowerCase().includes(lq) ||
         n.name.toLowerCase().includes(lq) ||
-        n.body.toLowerCase().includes(lq)
+        n.body.toLowerCase().includes(lq) ||
+        n.tags.some(t => t.toLowerCase().includes(lq))
       );
     }
     if (limit) notes = notes.slice(0, Number(limit));
@@ -154,9 +158,21 @@ function createApp() {
       heading: n.heading,
       date: n.date,
       promoted: n.promoted,
+      tags: n.tags,
       size: n.size,
       mtime: n.mtime,
     })));
+  });
+
+  app.get('/api/notes/tags', (req, res) => {
+    const notes = scanner.parseNotes();
+    const counts = {};
+    for (const n of notes) {
+      for (const t of n.tags) {
+        counts[t] = (counts[t] || 0) + 1;
+      }
+    }
+    res.json(Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([tag, count]) => ({ tag, count })));
   });
 
   app.get('/api/notes/:name', (req, res) => {
@@ -170,6 +186,25 @@ function createApp() {
     res.json(note);
   });
 
+  app.patch('/api/notes/:name/tags', (req, res) => {
+    const { name } = req.params;
+    if (name.includes('/') || name.includes('..') || !name.endsWith('.md')) {
+      return res.status(400).json({ error: 'Invalid note name' });
+    }
+    const { tags } = req.body;
+    if (!Array.isArray(tags)) return res.status(400).json({ error: 'tags must be an array' });
+    const filePath = path.join(CLAUDE_DIR, 'notes', name);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const { frontmatter, body } = scanner.parseFrontmatter(raw);
+    const sanitized = tags.map(t => String(t).trim().toLowerCase().replace(/[^a-z0-9._-]/g, '-')).filter(Boolean);
+    const tagLine = sanitized.length > 0 ? `[${sanitized.map(t => `"${t}"`).join(', ')}]` : '[]';
+    const promoted = frontmatter.promoted || 'false';
+    const date = frontmatter.date || '""';
+    fs.writeFileSync(filePath, `---\ndate: ${date}\npromoted: ${promoted}\ntags: ${tagLine}\n---\n${body}`);
+    res.json({ ok: true, tags: sanitized });
+  });
+
   app.patch('/api/notes/:name/promote', (req, res) => {
     const { name } = req.params;
     if (name.includes('/') || name.includes('..') || !name.endsWith('.md')) {
@@ -180,7 +215,8 @@ function createApp() {
     const raw = fs.readFileSync(filePath, 'utf8');
     const { frontmatter, body } = scanner.parseFrontmatter(raw);
     const newPromoted = !(frontmatter.promoted === 'true');
-    fs.writeFileSync(filePath, `---\ndate: ${frontmatter.date || '""'}\npromoted: ${newPromoted}\n---\n${body}`);
+    const tagLine = frontmatter.tags ? `\ntags: ${frontmatter.tags}` : '';
+    fs.writeFileSync(filePath, `---\ndate: ${frontmatter.date || '""'}\npromoted: ${newPromoted}${tagLine}\n---\n${body}`);
     res.json({ ok: true, promoted: newPromoted });
   });
 

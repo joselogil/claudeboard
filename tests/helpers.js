@@ -196,6 +196,7 @@ Body content of note one. Good for searching.
   write('notes/note-two.md', `---
 date: "2026-04-21 09:00"
 promoted: true
+tags: ["bugs", "frontend"]
 ---
 
 ## Promoted note heading

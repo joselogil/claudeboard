@@ -328,6 +328,7 @@ describe('notes API', () => {
         expect(n.heading).toBeDefined();
         expect(n.date).toBeDefined();
         expect(typeof n.promoted).toBe('boolean');
+        expect(Array.isArray(n.tags)).toBe(true);
         expect(n.body).toBeUndefined();
         expect(n.content).toBeUndefined();
       }
@@ -346,10 +347,77 @@ describe('notes API', () => {
       expect(res.body[0].name).toBe('note-two.md');
     });
 
+    test('filters by tag', async () => {
+      const res = await request(app).get('/api/notes?tag=bugs');
+      expect(res.status).toBe(200);
+      expect(res.body.length).toBe(1);
+      expect(res.body[0].name).toBe('note-two.md');
+    });
+
     test('returns empty array when no notes match', async () => {
       const res = await request(app).get('/api/notes?q=noresultsever');
       expect(res.status).toBe(200);
       expect(res.body).toEqual([]);
+    });
+  });
+
+  describe('GET /api/notes/tags', () => {
+    test('returns tag counts', async () => {
+      const res = await request(app).get('/api/notes/tags');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      const bugsTag = res.body.find(t => t.tag === 'bugs');
+      expect(bugsTag).toBeDefined();
+      expect(bugsTag.count).toBe(1);
+    });
+
+    test('returns empty array when no notes have tags', async () => {
+      teardownServer(fixture);
+      ({ fixture, app, CLAUDE_DIR, TRASH_DIR } = setupServer('notes-notags', []));
+      const res = await request(app).get('/api/notes/tags');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([]);
+    });
+  });
+
+  describe('PATCH /api/notes/:name/tags', () => {
+    test('saves tags to frontmatter', async () => {
+      const res = await request(app)
+        .patch('/api/notes/note-one.md/tags')
+        .send({ tags: ['refactor', 'backend'] });
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.tags).toEqual(['refactor', 'backend']);
+      const content = fs.readFileSync(path.join(CLAUDE_DIR, 'notes/note-one.md'), 'utf8');
+      expect(content).toContain('tags: ["refactor", "backend"]');
+    });
+
+    test('preserves date and promoted when updating tags', async () => {
+      await request(app).patch('/api/notes/note-one.md/tags').send({ tags: ['x'] });
+      const content = fs.readFileSync(path.join(CLAUDE_DIR, 'notes/note-one.md'), 'utf8');
+      expect(content).toContain('date:');
+      expect(content).toContain('promoted:');
+    });
+
+    test('rejects non-array tags', async () => {
+      const res = await request(app)
+        .patch('/api/notes/note-one.md/tags')
+        .send({ tags: 'not-an-array' });
+      expect(res.status).toBe(400);
+    });
+
+    test('rejects invalid note names', async () => {
+      const res = await request(app)
+        .patch('/api/notes/..%252F..%252Fetc.md/tags')
+        .send({ tags: ['x'] });
+      expect(res.status).toBe(400);
+    });
+
+    test('returns 404 for non-existent note', async () => {
+      const res = await request(app)
+        .patch('/api/notes/nope.md/tags')
+        .send({ tags: ['x'] });
+      expect(res.status).toBe(404);
     });
   });
 
