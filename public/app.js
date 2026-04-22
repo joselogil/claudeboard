@@ -695,11 +695,14 @@ async function renderNotes(container) {
             </div>
             <div class="plan-footer">
               <span class="plan-meta">${fmtBytes(n.size)} · ${n.date || shortDate(n.mtime)}</span>
-              <button class="btn-note-promote ${n.promoted ? 'note-promoted' : ''}"
-                      data-note-name="${escHtml(n.name)}"
-                      title="${n.promoted ? 'Unpin note' : 'Pin note'}">
-                ${n.promoted ? 'Pinned' : 'Pin'}
-              </button>
+              <div class="plan-footer-btns">
+                <button class="btn-load-plan btn-copy-note-path-card" data-note-path="~/.claude/notes/${escHtml(n.name)}" title="Copy path">Copy path</button>
+                <button class="btn-note-promote ${n.promoted ? 'note-promoted' : ''}"
+                        data-note-name="${escHtml(n.name)}"
+                        title="${n.promoted ? 'Unpin note' : 'Pin note'}">
+                  ${n.promoted ? 'Pinned' : 'Pin'}
+                </button>
+              </div>
             </div>
           </div>
         `).join('') || '<div class="empty">No notes found</div>'}
@@ -744,6 +747,13 @@ async function renderNotes(container) {
         } else {
           alert('Failed: ' + (result.error || 'unknown error'));
         }
+      });
+    });
+
+    container.querySelectorAll('.btn-copy-note-path-card').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        copyText(btn.dataset.notePath, btn);
       });
     });
 
@@ -857,7 +867,7 @@ async function openNoteModal(name) {
         </div>
         <div class="conv-resume-block">
           <code class="resume-cmd">${escHtml(notePath)}</code>
-          <button class="btn-copy-note-path" title="Copy path to paste into Claude">Copy path</button>
+          <button class="btn-copy-note-path btn-copy-cmd" title="Copy path to paste into Claude">Copy path</button>
           <button class="btn-note-promote-modal ${note.promoted ? 'note-promoted' : ''}"
                   title="${note.promoted ? 'Unpin note' : 'Pin note'}">
             ${note.promoted ? 'Pinned' : 'Pin'}
