@@ -300,12 +300,12 @@ describe('scanner', () => {
       expect(notes.length).toBe(3);
     });
 
-    test('includes name, heading, date, promoted, size, mtime, body', () => {
+    test('includes name, heading, date, tags, size, mtime, body', () => {
       for (const n of notes) {
         expect(typeof n.name).toBe('string');
         expect(typeof n.heading).toBe('string');
         expect(typeof n.date).toBe('string');
-        expect(typeof n.promoted).toBe('boolean');
+        expect(Array.isArray(n.tags)).toBe(true);
         expect(typeof n.size).toBe('number');
         expect(typeof n.mtime).toBe('string');
         expect(typeof n.body).toBe('string');
@@ -318,16 +318,8 @@ describe('scanner', () => {
       expect(n.date).not.toMatch(/^"/);
     });
 
-    test('parses promoted as boolean', () => {
-      const promoted = notes.find(n => n.name === 'note-two.md');
-      const unpromoted = notes.find(n => n.name === 'note-one.md');
-      expect(promoted.promoted).toBe(true);
-      expect(unpromoted.promoted).toBe(false);
-    });
-
-    test('sorts promoted notes first, then by mtime descending', () => {
-      expect(notes[0].promoted).toBe(true);
-      expect(notes[1].mtime >= notes[2].mtime).toBe(true);
+    test('sorts by mtime descending', () => {
+      expect(notes[0].mtime >= notes[1].mtime).toBe(true);
     });
 
     test('extracts ## style headings', () => {
@@ -339,7 +331,6 @@ describe('scanner', () => {
       const n = notes.find(n => n.name === 'note-one.md');
       expect(n.body).toContain('Body content of note one');
       expect(n.body).not.toContain('date:');
-      expect(n.body).not.toContain('promoted:');
     });
 
     test('returns empty array when notes dir does not exist', () => {

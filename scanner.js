@@ -162,34 +162,32 @@ function parsePlans() {
     .sort((a, b) => b.mtime.localeCompare(a.mtime));
 }
 
+function parseNoteFile(name) {
+  const filePath = path.join(CLAUDE_DIR, 'notes', name);
+  if (!fs.existsSync(filePath)) return null;
+  const stat = fs.statSync(filePath);
+  const raw = fs.readFileSync(filePath, 'utf8');
+  const { frontmatter, body } = parseFrontmatter(raw);
+  const headingMatch = raw.match(/^#{1,6}\s+(.+)$/m);
+  return {
+    name,
+    heading: headingMatch ? headingMatch[1] : name,
+    date: (frontmatter.date || '').replace(/^["']|["']$/g, ''),
+    tags: parseTags(frontmatter.tags),
+    size: stat.size,
+    mtime: stat.mtime.toISOString(),
+    body,
+    content: raw,
+  };
+}
+
 function parseNotes() {
   const notesDir = path.join(CLAUDE_DIR, 'notes');
   if (!fs.existsSync(notesDir)) return [];
   return fs.readdirSync(notesDir)
     .filter(f => f.endsWith('.md'))
-    .map(f => {
-      const filePath = path.join(notesDir, f);
-      const stat = fs.statSync(filePath);
-      const raw = fs.readFileSync(filePath, 'utf8');
-      const { frontmatter, body } = parseFrontmatter(raw);
-      const headingMatch = raw.match(/^#{1,6}\s+(.+)$/m);
-      const date = (frontmatter.date || '').replace(/^["']|["']$/g, '');
-      return {
-        name: f,
-        heading: headingMatch ? headingMatch[1] : f,
-        date,
-        promoted: frontmatter.promoted === 'true',
-        tags: parseTags(frontmatter.tags),
-        size: stat.size,
-        mtime: stat.mtime.toISOString(),
-        body,
-        content: raw,
-      };
-    })
-    .sort((a, b) => {
-      if (a.promoted !== b.promoted) return a.promoted ? -1 : 1;
-      return b.mtime.localeCompare(a.mtime);
-    });
+    .map(parseNoteFile)
+    .sort((a, b) => b.mtime.localeCompare(a.mtime));
 }
 
 function parseMemories() {
@@ -394,7 +392,10 @@ function getStats() {
   const plugins = parsePlugins();
   const projects = scanProjectDirs();
   const todos = parseTodos();
-  const notes = parseNotes();
+  const notesDir = path.join(CLAUDE_DIR, 'notes');
+  const notesCount = fs.existsSync(notesDir)
+    ? fs.readdirSync(notesDir).filter(f => f.endsWith('.md')).length
+    : 0;
   const totalTodos = todos.reduce((s, t) => s + t.items.length, 0);
   const recent = sessions.slice(0, 10);
 
@@ -405,7 +406,7 @@ function getStats() {
     plugins: plugins.length,
     projects: projects.length,
     todos: totalTodos,
-    notes: notes.length,
+    notes: notesCount,
     recent,
   };
 }
@@ -441,6 +442,8 @@ module.exports = {
   parseFrontmatter,
   parsePlans,
   parseNotes,
+  parseNoteFile,
+  parseTags,
   parseMemories,
   parseSessions,
   parseSessionFileMessages,

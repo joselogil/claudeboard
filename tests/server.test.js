@@ -327,17 +327,10 @@ describe('notes API', () => {
         expect(n.name).toBeDefined();
         expect(n.heading).toBeDefined();
         expect(n.date).toBeDefined();
-        expect(typeof n.promoted).toBe('boolean');
         expect(Array.isArray(n.tags)).toBe(true);
         expect(n.body).toBeUndefined();
         expect(n.content).toBeUndefined();
       }
-    });
-
-    test('promoted notes appear first', async () => {
-      const res = await request(app).get('/api/notes');
-      expect(res.status).toBe(200);
-      expect(res.body[0].promoted).toBe(true);
     });
 
     test('searches notes by body content', async () => {
@@ -392,11 +385,10 @@ describe('notes API', () => {
       expect(content).toContain('tags: ["refactor", "backend"]');
     });
 
-    test('preserves date and promoted when updating tags', async () => {
+    test('preserves date when updating tags', async () => {
       await request(app).patch('/api/notes/note-one.md/tags').send({ tags: ['x'] });
       const content = fs.readFileSync(path.join(CLAUDE_DIR, 'notes/note-one.md'), 'utf8');
       expect(content).toContain('date:');
-      expect(content).toContain('promoted:');
     });
 
     test('rejects non-array tags', async () => {
@@ -427,7 +419,6 @@ describe('notes API', () => {
       expect(res.status).toBe(200);
       expect(res.body.name).toBe('note-one.md');
       expect(res.body.body).toContain('Body content of note one');
-      expect(res.body.promoted).toBe(false);
     });
 
     test('returns 404 for non-existent note', async () => {
@@ -443,33 +434,6 @@ describe('notes API', () => {
     test('rejects non-.md filenames', async () => {
       const res = await request(app).get('/api/notes/settings.json');
       expect(res.status).toBe(400);
-    });
-  });
-
-  describe('PATCH /api/notes/:name/promote', () => {
-    test('toggles promoted from false to true', async () => {
-      const res = await request(app).patch('/api/notes/note-one.md/promote');
-      expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(true);
-      expect(res.body.promoted).toBe(true);
-      const fileContent = fs.readFileSync(path.join(CLAUDE_DIR, 'notes/note-one.md'), 'utf8');
-      expect(fileContent).toContain('promoted: true');
-    });
-
-    test('toggles promoted from true to false', async () => {
-      const res = await request(app).patch('/api/notes/note-two.md/promote');
-      expect(res.status).toBe(200);
-      expect(res.body.promoted).toBe(false);
-    });
-
-    test('rejects path traversal', async () => {
-      const res = await request(app).patch('/api/notes/..%252F..%252Fetc.md/promote');
-      expect(res.status).toBe(400);
-    });
-
-    test('returns 404 for non-existent note', async () => {
-      const res = await request(app).patch('/api/notes/nope.md/promote');
-      expect(res.status).toBe(404);
     });
   });
 

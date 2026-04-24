@@ -157,7 +157,6 @@ function createApp() {
       name: n.name,
       heading: n.heading,
       date: n.date,
-      promoted: n.promoted,
       tags: n.tags,
       size: n.size,
       mtime: n.mtime,
@@ -180,8 +179,7 @@ function createApp() {
     if (name.includes('/') || name.includes('..') || !name.endsWith('.md')) {
       return res.status(400).json({ error: 'Invalid note name' });
     }
-    const notes = scanner.parseNotes();
-    const note = notes.find(n => n.name === name);
+    const note = scanner.parseNoteFile(name);
     if (!note) return res.status(404).json({ error: 'Not found' });
     res.json(note);
   });
@@ -199,25 +197,9 @@ function createApp() {
     const { frontmatter, body } = scanner.parseFrontmatter(raw);
     const sanitized = tags.map(t => String(t).trim().toLowerCase().replace(/[^a-z0-9._-]/g, '-')).filter(Boolean);
     const tagLine = sanitized.length > 0 ? `[${sanitized.map(t => `"${t}"`).join(', ')}]` : '[]';
-    const promoted = frontmatter.promoted || 'false';
     const date = frontmatter.date || '""';
-    fs.writeFileSync(filePath, `---\ndate: ${date}\npromoted: ${promoted}\ntags: ${tagLine}\n---\n${body}`);
+    fs.writeFileSync(filePath, `---\ndate: ${date}\ntags: ${tagLine}\n---\n${body}`);
     res.json({ ok: true, tags: sanitized });
-  });
-
-  app.patch('/api/notes/:name/promote', (req, res) => {
-    const { name } = req.params;
-    if (name.includes('/') || name.includes('..') || !name.endsWith('.md')) {
-      return res.status(400).json({ error: 'Invalid note name' });
-    }
-    const filePath = path.join(CLAUDE_DIR, 'notes', name);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
-    const raw = fs.readFileSync(filePath, 'utf8');
-    const { frontmatter, body } = scanner.parseFrontmatter(raw);
-    const newPromoted = !(frontmatter.promoted === 'true');
-    const tagLine = frontmatter.tags ? `\ntags: ${frontmatter.tags}` : '';
-    fs.writeFileSync(filePath, `---\ndate: ${frontmatter.date || '""'}\npromoted: ${newPromoted}${tagLine}\n---\n${body}`);
-    res.json({ ok: true, promoted: newPromoted });
   });
 
   app.get('/api/memories', (req, res) => {

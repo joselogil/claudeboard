@@ -624,7 +624,6 @@ function openTagEditor(tagArea) {
     if (result.ok) {
       tagArea.dataset.tags = JSON.stringify(result.tags);
       tagArea.innerHTML = renderTagChips(result.tags, planName);
-      tagArea.onclick = (e) => { e.stopPropagation(); openTagEditor(tagArea); };
     } else {
       alert('Save failed: ' + result.error);
     }
@@ -632,7 +631,6 @@ function openTagEditor(tagArea) {
 
   editor.querySelector('.tag-cancel-btn').addEventListener('click', () => {
     tagArea.innerHTML = renderTagChips(currentTags, planName);
-    tagArea.onclick = (e) => { e.stopPropagation(); openTagEditor(tagArea, container); };
   });
 
   input.focus();
@@ -650,12 +648,14 @@ views.notes = async function(container) {
 
 async function renderNotes(container) {
   try {
-    const allTags = await api.get('/notes/tags');
     const params = new URLSearchParams();
     if (noteQ) params.set('q', noteQ);
     if (noteTag) params.set('tag', noteTag);
     const qs = params.toString();
-    const notes = await api.get('/notes' + (qs ? '?' + qs : ''));
+    const [allTags, notes] = await Promise.all([
+      api.get('/notes/tags'),
+      api.get('/notes' + (qs ? '?' + qs : '')),
+    ]);
 
     const tagFilterHtml = allTags.length > 0 ? `
       <div class="tag-filter-bar">
@@ -697,11 +697,6 @@ async function renderNotes(container) {
               <span class="plan-meta">${fmtBytes(n.size)} · ${n.date || shortDate(n.mtime)}</span>
               <div class="plan-footer-btns">
                 <button class="btn-load-plan btn-copy-note-path-card" data-note-path="~/.claude/notes/${escHtml(n.name)}" title="Copy path">Copy path</button>
-                <button class="btn-note-promote ${n.promoted ? 'note-promoted' : ''}"
-                        data-note-name="${escHtml(n.name)}"
-                        title="${n.promoted ? 'Unpin note' : 'Pin note'}">
-                  ${n.promoted ? 'Pinned' : 'Pin'}
-                </button>
               </div>
             </div>
           </div>
@@ -731,7 +726,7 @@ async function renderNotes(container) {
 
     container.querySelectorAll('.plan-card').forEach(card => {
       card.addEventListener('click', e => {
-        if (e.target.closest('.btn-delete') || e.target.closest('.btn-note-promote') || e.target.closest('.plan-tags')) return;
+        if (e.target.closest('.btn-delete') || e.target.closest('.plan-tags')) return;
         openNoteModal(card.dataset.name);
       });
     });
@@ -757,24 +752,10 @@ async function renderNotes(container) {
       });
     });
 
-    container.querySelectorAll('.btn-note-promote').forEach(btn => {
-      btn.addEventListener('click', async e => {
-        e.stopPropagation();
-        const name = btn.dataset.noteName;
-        const r = await fetch('/api/notes/' + encodeURIComponent(name) + '/promote', { method: 'PATCH' });
-        const result = await r.json();
-        if (result.ok) {
-          await renderNotes(container);
-        } else {
-          alert('Pin failed: ' + (result.error || 'unknown error'));
-        }
-      });
-    });
-
     container.querySelectorAll('.plan-tags[data-note-name]').forEach(tagArea => {
       tagArea.addEventListener('click', e => {
         e.stopPropagation();
-        openNoteTagEditor(tagArea, container);
+        openNoteTagEditor(tagArea);
       });
     });
   } catch (err) {
@@ -782,7 +763,7 @@ async function renderNotes(container) {
   }
 }
 
-function openNoteTagEditor(tagArea, container) {
+function openNoteTagEditor(tagArea) {
   const noteName = tagArea.dataset.noteName;
   const currentTags = JSON.parse(tagArea.dataset.tags || '[]');
 
@@ -839,7 +820,6 @@ function openNoteTagEditor(tagArea, container) {
     if (result.ok) {
       tagArea.dataset.tags = JSON.stringify(result.tags);
       tagArea.innerHTML = renderTagChips(result.tags, noteName);
-      tagArea.onclick = e => { e.stopPropagation(); openNoteTagEditor(tagArea, container); };
     } else {
       alert('Save failed: ' + result.error);
     }
@@ -847,7 +827,6 @@ function openNoteTagEditor(tagArea, container) {
 
   editor.querySelector('.tag-cancel-btn').addEventListener('click', () => {
     tagArea.innerHTML = renderTagChips(currentTags, noteName);
-    tagArea.onclick = e => { e.stopPropagation(); openNoteTagEditor(tagArea, container); };
   });
 
   input.focus();
@@ -868,10 +847,6 @@ async function openNoteModal(name) {
         <div class="conv-resume-block">
           <code class="resume-cmd">${escHtml(notePath)}</code>
           <button class="btn-copy-note-path btn-copy-cmd" title="Copy path to paste into Claude">Copy path</button>
-          <button class="btn-note-promote-modal ${note.promoted ? 'note-promoted' : ''}"
-                  title="${note.promoted ? 'Unpin note' : 'Pin note'}">
-            ${note.promoted ? 'Pinned' : 'Pin'}
-          </button>
           <button class="btn-delete btn-delete-note-modal" title="Move to trash">Trash</button>
         </div>
       </div>
@@ -880,17 +855,6 @@ async function openNoteModal(name) {
 
     modalContent.querySelector('.btn-copy-note-path').addEventListener('click', e => {
       copyText(notePath, e.target);
-    });
-
-    modalContent.querySelector('.btn-note-promote-modal').addEventListener('click', async () => {
-      const el = modalContent.querySelector('.btn-note-promote-modal');
-      const r = await fetch('/api/notes/' + encodeURIComponent(name) + '/promote', { method: 'PATCH' });
-      const result = await r.json();
-      if (result.ok) {
-        el.textContent = result.promoted ? 'Pinned' : 'Pin';
-        el.classList.toggle('note-promoted', result.promoted);
-        el.title = result.promoted ? 'Unpin note' : 'Pin note';
-      }
     });
 
     modalContent.querySelector('.btn-delete-note-modal').addEventListener('click', async () => {
