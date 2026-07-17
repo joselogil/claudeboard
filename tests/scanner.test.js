@@ -408,4 +408,68 @@ describe('scanner', () => {
       expect(nmConfig).toBeUndefined();
     });
   });
+
+  describe('multi-account support', () => {
+    let fixtureA, fixtureB;
+
+    afterEach(() => {
+      if (fixtureA) fixtureA.cleanup();
+      if (fixtureB) fixtureB.cleanup();
+      fixtureA = fixtureB = undefined;
+      delete process.env.CLAUDEBOARD_ACCOUNTS;
+    });
+
+    test('scanner fn reads from an explicitly-passed dataDir', () => {
+      fixtureA = createFixture('acct-a', planFixture);
+      fixtureB = createFixture('acct-b', ({ write }) => {
+        write('plans/only-b.md', '# Only in B\n');
+      });
+      scanner = loadScanner(fixtureA.claudeDir);
+
+      const plansA = scanner.parsePlans(fixtureA.claudeDir);
+      const plansB = scanner.parsePlans(fixtureB.claudeDir);
+      expect(plansA.some(p => p.name === 'plan-one.md')).toBe(true);
+      expect(plansA.some(p => p.name === 'only-b.md')).toBe(false);
+      expect(plansB.some(p => p.name === 'only-b.md')).toBe(true);
+      expect(plansB.some(p => p.name === 'plan-one.md')).toBe(false);
+    });
+
+    test('scanProjectDirs caches per-account (no cross-account bleed)', () => {
+      fixtureA = createFixture('cache-a', sessionFixture);
+      fixtureB = createFixture('cache-b', ({ write }) => {
+        write('projects/-home-x-proj-b/.keep', '');
+      });
+      scanner = loadScanner(fixtureA.claudeDir);
+
+      const a = scanner.scanProjectDirs(fixtureA.claudeDir);
+      const b = scanner.scanProjectDirs(fixtureB.claudeDir);
+      expect(b.map(p => p.key)).toContain('-home-x-proj-b');
+      expect(a.map(p => p.key)).not.toContain('-home-x-proj-b');
+    });
+
+    test('listAccounts returns only existing dirs', () => {
+      fixtureA = createFixture('list-a', () => {});
+      const missing = path.join(fixtureA.tmpDir, 'does-not-exist');
+      process.env.CLAUDEBOARD_ACCOUNTS =
+        `personal:Personal:${fixtureA.claudeDir},ghost:Ghost:${missing}`;
+      scanner = loadScanner(fixtureA.claudeDir);
+
+      const accounts = scanner.listAccounts();
+      expect(accounts.map(a => a.id)).toEqual(['personal']);
+      expect(accounts[0].label).toBe('Personal');
+    });
+
+    test('resolveDataDir maps id to dir and falls back to first existing', () => {
+      fixtureA = createFixture('resolve-a', () => {});
+      fixtureB = createFixture('resolve-b', () => {});
+      process.env.CLAUDEBOARD_ACCOUNTS =
+        `personal:Personal:${fixtureA.claudeDir},work:Work:${fixtureB.claudeDir}`;
+      scanner = loadScanner(fixtureA.claudeDir);
+
+      expect(scanner.resolveDataDir('work')).toBe(fixtureB.claudeDir);
+      expect(scanner.resolveDataDir('personal')).toBe(fixtureA.claudeDir);
+      expect(scanner.resolveDataDir('nope')).toBe(fixtureA.claudeDir);
+      expect(scanner.resolveDataDir()).toBe(fixtureA.claudeDir);
+    });
+  });
 });

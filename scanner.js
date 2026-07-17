@@ -4,6 +4,38 @@ const os = require('os');
 
 const CLAUDE_DIR = process.env.CLAUDEBOARD_DATA_DIR || path.join(os.homedir(), '.claude');
 
+// Account registry. The first account's dir is CLAUDE_DIR so that the test
+// harness (which sets CLAUDEBOARD_DATA_DIR) and default behavior are preserved.
+// Override with CLAUDEBOARD_ACCOUNTS="id:Label:/path,id2:Label2:/path2".
+function buildAccounts() {
+  if (process.env.CLAUDEBOARD_ACCOUNTS) {
+    return process.env.CLAUDEBOARD_ACCOUNTS.split(',').map(s => {
+      const [id, label, dir] = s.split(':');
+      return { id: id.trim(), label: label.trim(), dir: dir.trim() };
+    });
+  }
+  return [
+    { id: 'personal', label: 'Personal', dir: CLAUDE_DIR },
+    { id: 'work', label: 'Work', dir: path.join(os.homedir(), '.claude-work') },
+  ];
+}
+
+const ACCOUNTS = buildAccounts();
+
+// Only accounts whose directory actually exists. Resolved at call time so a
+// newly-created account dir appears without restarting the server.
+function listAccounts() {
+  return ACCOUNTS.filter(a => fs.existsSync(a.dir)).map(({ id, label }) => ({ id, label }));
+}
+
+// Map an account id to its data directory. Falls back to the first existing
+// account, then to CLAUDE_DIR.
+function resolveDataDir(accountId) {
+  const a = ACCOUNTS.find(x => x.id === accountId && fs.existsSync(x.dir))
+    || ACCOUNTS.find(x => fs.existsSync(x.dir));
+  return a ? a.dir : CLAUDE_DIR;
+}
+
 function readJsonSafe(filePath) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -113,8 +145,8 @@ function parseSessionFileMessages(filePath) {
   return { messages, projectPath: meta.cwd || null };
 }
 
-function parseSessions() {
-  const projectsDir = path.join(CLAUDE_DIR, 'projects');
+function parseSessions(dataDir = CLAUDE_DIR) {
+  const projectsDir = path.join(dataDir, 'projects');
   if (!fs.existsSync(projectsDir)) return [];
   const sessions = [];
 
@@ -138,8 +170,8 @@ function parseSessions() {
   return sessions;
 }
 
-function parsePlans() {
-  const plansDir = path.join(CLAUDE_DIR, 'plans');
+function parsePlans(dataDir = CLAUDE_DIR) {
+  const plansDir = path.join(dataDir, 'plans');
   if (!fs.existsSync(plansDir)) return [];
   return fs.readdirSync(plansDir)
     .filter(f => f.endsWith('.md'))
@@ -162,8 +194,8 @@ function parsePlans() {
     .sort((a, b) => b.mtime.localeCompare(a.mtime));
 }
 
-function parseNoteFile(name) {
-  const filePath = path.join(CLAUDE_DIR, 'notes', name);
+function parseNoteFile(name, dataDir = CLAUDE_DIR) {
+  const filePath = path.join(dataDir, 'notes', name);
   if (!fs.existsSync(filePath)) return null;
   const stat = fs.statSync(filePath);
   const raw = fs.readFileSync(filePath, 'utf8');
@@ -181,19 +213,19 @@ function parseNoteFile(name) {
   };
 }
 
-function parseNotes() {
-  const notesDir = path.join(CLAUDE_DIR, 'notes');
+function parseNotes(dataDir = CLAUDE_DIR) {
+  const notesDir = path.join(dataDir, 'notes');
   if (!fs.existsSync(notesDir)) return [];
   return fs.readdirSync(notesDir)
     .filter(f => f.endsWith('.md'))
-    .map(parseNoteFile)
+    .map(f => parseNoteFile(f, dataDir))
     .sort((a, b) => b.mtime.localeCompare(a.mtime));
 }
 
-function parseMemories() {
-  const projectsDir = path.join(CLAUDE_DIR, 'projects');
+function parseMemories(dataDir = CLAUDE_DIR) {
+  const projectsDir = path.join(dataDir, 'projects');
   if (!fs.existsSync(projectsDir)) return [];
-  const projectPathMap = Object.fromEntries(scanProjectDirs().map(p => [p.key, p.path]));
+  const projectPathMap = Object.fromEntries(scanProjectDirs(dataDir).map(p => [p.key, p.path]));
   const memories = [];
   for (const proj of fs.readdirSync(projectsDir)) {
     const projDir = path.join(projectsDir, proj);
@@ -222,8 +254,8 @@ function parseMemories() {
 }
 
 
-function parseTodos() {
-  const todosDir = path.join(CLAUDE_DIR, 'todos');
+function parseTodos(dataDir = CLAUDE_DIR) {
+  const todosDir = path.join(dataDir, 'todos');
   if (!fs.existsSync(todosDir)) return [];
   const all = [];
   for (const f of fs.readdirSync(todosDir)) {
@@ -236,11 +268,11 @@ function parseTodos() {
   return all;
 }
 
-function parsePlugins() {
-  const pluginFile = path.join(CLAUDE_DIR, 'plugins', 'installed_plugins.json');
+function parsePlugins(dataDir = CLAUDE_DIR) {
+  const pluginFile = path.join(dataDir, 'plugins', 'installed_plugins.json');
   const data = readJsonSafe(pluginFile);
   if (!data || !data.plugins) return [];
-  const settings = readJsonSafe(path.join(CLAUDE_DIR, 'settings.json')) || {};
+  const settings = readJsonSafe(path.join(dataDir, 'settings.json')) || {};
   const enabled = settings.enabledPlugins || {};
   return Object.entries(data.plugins).map(([name, installs]) => {
     const latest = Array.isArray(installs) ? installs[installs.length - 1] : installs;
@@ -262,23 +294,23 @@ function parsePlugins() {
   });
 }
 
-function parseSettings() {
-  return readJsonSafe(path.join(CLAUDE_DIR, 'settings.json')) || {};
+function parseSettings(dataDir = CLAUDE_DIR) {
+  return readJsonSafe(path.join(dataDir, 'settings.json')) || {};
 }
 
-let _projectCache = null;
-let _projectCacheTime = 0;
+// Per-account project cache, keyed by data directory.
+const _projectCache = new Map();
 
-function scanProjectDirs() {
+function scanProjectDirs(dataDir = CLAUDE_DIR) {
   const now = Date.now();
-  if (_projectCache && now - _projectCacheTime < 60000) return _projectCache;
+  const cached = _projectCache.get(dataDir);
+  if (cached && now - cached.time < 60000) return cached.data;
 
-  const projectsDir = path.join(CLAUDE_DIR, 'projects');
+  const projectsDir = path.join(dataDir, 'projects');
   const results = [];
 
   if (!fs.existsSync(projectsDir)) {
-    _projectCache = results;
-    _projectCacheTime = now;
+    _projectCache.set(dataDir, { data: results, time: now });
     return results;
   }
 
@@ -313,8 +345,7 @@ function scanProjectDirs() {
     });
   }
 
-  _projectCache = results;
-  _projectCacheTime = now;
+  _projectCache.set(dataDir, { data: results, time: now });
   return results;
 }
 
@@ -385,14 +416,14 @@ function scanClaudeConfigs() {
   return found;
 }
 
-function getStats() {
-  const plans = parsePlans();
-  const memories = parseMemories();
-  const sessions = parseSessions();
-  const plugins = parsePlugins();
-  const projects = scanProjectDirs();
-  const todos = parseTodos();
-  const notesDir = path.join(CLAUDE_DIR, 'notes');
+function getStats(dataDir = CLAUDE_DIR) {
+  const plans = parsePlans(dataDir);
+  const memories = parseMemories(dataDir);
+  const sessions = parseSessions(dataDir);
+  const plugins = parsePlugins(dataDir);
+  const projects = scanProjectDirs(dataDir);
+  const todos = parseTodos(dataDir);
+  const notesDir = path.join(dataDir, 'notes');
   const notesCount = fs.existsSync(notesDir)
     ? fs.readdirSync(notesDir).filter(f => f.endsWith('.md')).length
     : 0;
@@ -411,9 +442,9 @@ function getStats() {
   };
 }
 
-function parseMarketplaces() {
-  const known = readJsonSafe(path.join(CLAUDE_DIR, 'plugins', 'known_marketplaces.json')) || {};
-  const countsData = readJsonSafe(path.join(CLAUDE_DIR, 'plugins', 'install-counts-cache.json')) || {};
+function parseMarketplaces(dataDir = CLAUDE_DIR) {
+  const known = readJsonSafe(path.join(dataDir, 'plugins', 'known_marketplaces.json')) || {};
+  const countsData = readJsonSafe(path.join(dataDir, 'plugins', 'install-counts-cache.json')) || {};
   const counts = countsData.plugins || countsData;
   const result = [];
 
@@ -454,5 +485,8 @@ module.exports = {
   scanProjectDirs,
   scanClaudeConfigs,
   getStats,
-  resetCache() { _projectCache = null; _projectCacheTime = 0; },
+  listAccounts,
+  resolveDataDir,
+  CLAUDE_DIR,
+  resetCache() { _projectCache.clear(); },
 };

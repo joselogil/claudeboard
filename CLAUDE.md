@@ -31,9 +31,28 @@ Node 18+ (tested on v25.5.0). Dependencies: express (runtime), vitest + supertes
 ## Architecture
 
 - No build step. Vanilla HTML/CSS/JS frontend.
-- All data read live from `~/.claude/` on each request (no caching except `scanProjectDirs` which caches 60s).
+- All data read live from the active account's data dir on each request (no caching except `scanProjectDirs` which caches 60s, keyed per data dir).
 - Frontend uses hash-based routing (`#overview`, `#plans`, etc). Views are functions on the `views` object.
 - Modal system: `openModal(html)` / `closeModal()` — used for plan content and session threads.
+
+## Accounts (multi-account)
+
+Supports multiple Claude data directories, switchable from a dropdown at the top of the sidebar.
+Default registry (auto-detected, only shown if the dir exists): `personal` → `~/.claude`,
+`work` → `~/.claude-work`. Override with `CLAUDEBOARD_ACCOUNTS="id:Label:/path,id2:Label2:/path2"`
+(used by tests to inject fixture dirs). One account is active at a time.
+
+- `scanner.js`: `ACCOUNTS` registry (`buildAccounts()`), `listAccounts()` (existing dirs only),
+  `resolveDataDir(id)` (id→dir, falls back to first existing). Every scanner fn takes an optional
+  `dataDir` param defaulting to `CLAUDE_DIR` (the primary account), preserving old behavior + tests.
+- `server.js`: `acct(req)` resolves the dir from `?account=` (GET/DELETE) or `req.body.account`
+  (POST/PATCH/PUT) and is threaded into every scanner call and direct file-path build.
+- Frontend: `_account` (persisted in `localStorage` `claudeboard.account`); `api` helper appends
+  `?account=` to GETs/DELETEs and `{account}` to write bodies via `withAccount()`. `claudeDirLabel()`
+  swaps `~/.claude` ↔ `~/.claude-work` in copy strings; work-account Resume prefixes
+  `CLAUDE_CONFIG_DIR=~/.claude-work`.
+- **Trash is global** (single `trash/` dir). Restore uses the recorded `originalPath`, so items
+  return to the correct account automatically. **Configs are account-agnostic** (home-tree scan).
 
 ## Data Sources
 
@@ -52,6 +71,10 @@ Node 18+ (tested on v25.5.0). Dependencies: express (runtime), vitest + supertes
 
 ```
 GET  /api/meta                                — homedir, version
+GET  /api/accounts                            — [{id,label}] of existing accounts
+
+# All routes below accept ?account=<id> (or account in the JSON body for writes)
+# to target a specific account; omitted = primary (first existing) account.
 GET  /api/stats
 GET  /api/conversations?q=&project=&limit=&offset=   — session list
 GET  /api/conversations/:project/:sessionId   — full message thread

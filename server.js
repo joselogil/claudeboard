@@ -26,17 +26,24 @@ function createApp() {
 
   const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || '0.1.0';
 
+  // Resolve the active account's data directory from the request.
+  const acct = req => scanner.resolveDataDir(req.query.account || (req.body && req.body.account));
+
   app.get('/api/meta', (req, res) => {
     res.json({ homedir: os.homedir(), version: PKG_VERSION });
   });
 
+  app.get('/api/accounts', (req, res) => {
+    res.json(scanner.listAccounts());
+  });
+
   app.get('/api/stats', (req, res) => {
-    res.json(scanner.getStats());
+    res.json(scanner.getStats(acct(req)));
   });
 
   app.get('/api/conversations', (req, res) => {
     const { q, project, limit = 50, offset = 0 } = req.query;
-    let sessions = scanner.parseSessions();
+    let sessions = scanner.parseSessions(acct(req));
     if (project) {
       sessions = sessions.filter(s => s.project === project);
     }
@@ -60,7 +67,7 @@ function createApp() {
     if ([project, sessionId].some(s => s.includes('..') || s.includes('/'))) {
       return res.status(400).json({ error: 'Invalid' });
     }
-    const filePath = path.join(CLAUDE_DIR, 'projects', project, sessionId + '.jsonl');
+    const filePath = path.join(acct(req), 'projects', project, sessionId + '.jsonl');
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
     const { messages, projectPath } = scanner.parseSessionFileMessages(filePath);
     res.json({ messages, projectPath });
@@ -68,7 +75,7 @@ function createApp() {
 
   app.get('/api/plans', (req, res) => {
     const { q, tag, limit } = req.query;
-    let plans = scanner.parsePlans();
+    let plans = scanner.parsePlans(acct(req));
     if (tag) {
       plans = plans.filter(p => p.tags.includes(tag));
     }
@@ -92,7 +99,7 @@ function createApp() {
   });
 
   app.get('/api/plans/tags', (req, res) => {
-    const plans = scanner.parsePlans();
+    const plans = scanner.parsePlans(acct(req));
     const counts = {};
     for (const p of plans) {
       for (const t of p.tags) {
@@ -106,7 +113,7 @@ function createApp() {
   });
 
   app.get('/api/plans/:name', (req, res) => {
-    const plans = scanner.parsePlans();
+    const plans = scanner.parsePlans(acct(req));
     const plan = plans.find(p => p.name === req.params.name);
     if (!plan) return res.status(404).json({ error: 'Not found' });
     res.json(plan);
@@ -120,7 +127,7 @@ function createApp() {
     const { tags } = req.body;
     if (!Array.isArray(tags)) return res.status(400).json({ error: 'tags must be an array' });
 
-    const filePath = path.join(CLAUDE_DIR, 'plans', name);
+    const filePath = path.join(acct(req), 'plans', name);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
 
     const raw = fs.readFileSync(filePath, 'utf8');
@@ -139,7 +146,7 @@ function createApp() {
 
   app.get('/api/notes', (req, res) => {
     const { q, tag, limit } = req.query;
-    let notes = scanner.parseNotes();
+    let notes = scanner.parseNotes(acct(req));
     if (tag) {
       notes = notes.filter(n => n.tags.includes(tag));
     }
@@ -164,7 +171,7 @@ function createApp() {
   });
 
   app.get('/api/notes/tags', (req, res) => {
-    const notes = scanner.parseNotes();
+    const notes = scanner.parseNotes(acct(req));
     const counts = {};
     for (const n of notes) {
       for (const t of n.tags) {
@@ -179,7 +186,7 @@ function createApp() {
     if (name.includes('/') || name.includes('..') || !name.endsWith('.md')) {
       return res.status(400).json({ error: 'Invalid note name' });
     }
-    const note = scanner.parseNoteFile(name);
+    const note = scanner.parseNoteFile(name, acct(req));
     if (!note) return res.status(404).json({ error: 'Not found' });
     res.json(note);
   });
@@ -191,7 +198,7 @@ function createApp() {
     }
     const { tags } = req.body;
     if (!Array.isArray(tags)) return res.status(400).json({ error: 'tags must be an array' });
-    const filePath = path.join(CLAUDE_DIR, 'notes', name);
+    const filePath = path.join(acct(req), 'notes', name);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
     const raw = fs.readFileSync(filePath, 'utf8');
     const { frontmatter, body } = scanner.parseFrontmatter(raw);
@@ -204,7 +211,7 @@ function createApp() {
 
   app.get('/api/memories', (req, res) => {
     const { q } = req.query;
-    let memories = scanner.parseMemories();
+    let memories = scanner.parseMemories(acct(req));
     if (q) {
       const lq = q.toLowerCase();
       memories = memories.filter(m =>
@@ -218,23 +225,23 @@ function createApp() {
   });
 
   app.get('/api/todos', (req, res) => {
-    res.json(scanner.parseTodos());
+    res.json(scanner.parseTodos(acct(req)));
   });
 
   app.get('/api/plugins', (req, res) => {
-    res.json(scanner.parsePlugins());
+    res.json(scanner.parsePlugins(acct(req)));
   });
 
   app.get('/api/marketplaces', (req, res) => {
-    res.json(scanner.parseMarketplaces());
+    res.json(scanner.parseMarketplaces(acct(req)));
   });
 
   app.get('/api/settings', (req, res) => {
-    res.json(scanner.parseSettings());
+    res.json(scanner.parseSettings(acct(req)));
   });
 
   app.get('/api/projects', (req, res) => {
-    res.json(scanner.scanProjectDirs());
+    res.json(scanner.scanProjectDirs(acct(req)));
   });
 
   app.get('/api/configs', (req, res) => {
@@ -264,7 +271,7 @@ function createApp() {
     if (name.includes('/') || name.includes('..')) {
       return res.status(400).json({ error: 'Invalid plugin name' });
     }
-    const settingsFile = path.join(CLAUDE_DIR, 'settings.json');
+    const settingsFile = path.join(acct(req), 'settings.json');
     const settings = scanner.readJsonSafe(settingsFile) || {};
     settings.enabledPlugins = settings.enabledPlugins || {};
     settings.enabledPlugins[name] = true;
@@ -277,7 +284,7 @@ function createApp() {
     if (name.includes('/') || name.includes('..')) {
       return res.status(400).json({ error: 'Invalid plugin name' });
     }
-    const settingsFile = path.join(CLAUDE_DIR, 'settings.json');
+    const settingsFile = path.join(acct(req), 'settings.json');
     const settings = scanner.readJsonSafe(settingsFile) || {};
     if (settings.enabledPlugins) delete settings.enabledPlugins[name];
     fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
@@ -289,7 +296,7 @@ function createApp() {
     if (name.includes('/') || name.includes('..')) {
       return res.status(400).json({ error: 'Invalid plugin name' });
     }
-    const pluginFile = path.join(CLAUDE_DIR, 'plugins', 'installed_plugins.json');
+    const pluginFile = path.join(acct(req), 'plugins', 'installed_plugins.json');
     const data = scanner.readJsonSafe(pluginFile);
     if (!data || !data.plugins?.[name]) return res.status(404).json({ error: 'Plugin not found' });
 
@@ -315,7 +322,7 @@ function createApp() {
     if (name.includes('/') || name.includes('..') || !name.endsWith('.md')) {
       return res.status(400).json({ error: 'Invalid plan name' });
     }
-    const filePath = path.join(CLAUDE_DIR, 'plans', name);
+    const filePath = path.join(acct(req), 'plans', name);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
     trashFile(filePath, filePath);
     res.json({ ok: true });
@@ -326,7 +333,7 @@ function createApp() {
     if (name.includes('/') || name.includes('..') || !name.endsWith('.md')) {
       return res.status(400).json({ error: 'Invalid note name' });
     }
-    const filePath = path.join(CLAUDE_DIR, 'notes', name);
+    const filePath = path.join(acct(req), 'notes', name);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
     trashFile(filePath, filePath);
     res.json({ ok: true });
@@ -337,7 +344,7 @@ function createApp() {
     if ([project, sessionId].some(s => s.includes('/') || s.includes('..'))) {
       return res.status(400).json({ error: 'Invalid path' });
     }
-    const filePath = path.join(CLAUDE_DIR, 'projects', project, sessionId + '.jsonl');
+    const filePath = path.join(acct(req), 'projects', project, sessionId + '.jsonl');
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
     trashFile(filePath, filePath);
     res.json({ ok: true });
@@ -349,7 +356,7 @@ function createApp() {
       return res.status(400).json({ error: 'Invalid path' });
     }
     if (!file.endsWith('.md')) return res.status(400).json({ error: 'Invalid file' });
-    const filePath = path.join(CLAUDE_DIR, 'projects', project, 'memory', file);
+    const filePath = path.join(acct(req), 'projects', project, 'memory', file);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
     trashFile(filePath, filePath);
     res.json({ ok: true });
@@ -358,7 +365,7 @@ function createApp() {
   app.delete('/api/projects/:key', (req, res) => {
     const key = req.params.key;
     if (key.includes('..') || key.includes('/')) return res.status(400).json({ error: 'Invalid' });
-    const dirPath = path.join(CLAUDE_DIR, 'projects', key);
+    const dirPath = path.join(acct(req), 'projects', key);
     if (!fs.existsSync(dirPath)) return res.status(404).json({ error: 'Not found' });
     trashFile(dirPath, dirPath);
     res.json({ ok: true });

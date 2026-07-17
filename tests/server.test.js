@@ -6,6 +6,7 @@ const {
   pluginFixture,
   noteFixture,
   setupServer,
+  setupServerMultiAccount,
   teardownServer,
 } = require('./helpers');
 
@@ -612,5 +613,69 @@ describe('trash system', () => {
       const res = await request(app).delete('/api/trash/nonexistent');
       expect(res.status).toBe(404);
     });
+  });
+});
+
+describe('server API — multi-account', () => {
+  let fixture, workFixture, app, TRASH_DIR;
+
+  beforeEach(() => {
+    ({ fixture, workFixture, app, TRASH_DIR } = setupServerMultiAccount('multi'));
+  });
+
+  afterEach(() => {
+    teardownServer(fixture, workFixture);
+  });
+
+  test('GET /api/accounts lists both accounts', async () => {
+    const res = await request(app).get('/api/accounts');
+    expect(res.status).toBe(200);
+    expect(res.body.map(a => a.id).sort()).toEqual(['personal', 'work']);
+  });
+
+  test('reads work account data with ?account=work', async () => {
+    const res = await request(app).get('/api/conversations?account=work');
+    expect(res.status).toBe(200);
+    const msgs = res.body.items.map(s => s.firstMessage).join(' ');
+    expect(msgs).toContain('Work account only session');
+    expect(msgs).not.toContain('Hello, help me build a web app');
+  });
+
+  test('defaults to personal account when no ?account given', async () => {
+    const res = await request(app).get('/api/conversations');
+    const msgs = res.body.items.map(s => s.firstMessage).join(' ');
+    expect(msgs).toContain('Hello, help me build a web app');
+    expect(msgs).not.toContain('Work account only session');
+  });
+
+  test('stats reflect the requested account', async () => {
+    const personal = (await request(app).get('/api/stats')).body;
+    const work = (await request(app).get('/api/stats?account=work')).body;
+    expect(work.plans).toBe(1);          // work fixture has one plan
+    expect(personal.plans).toBeGreaterThan(1);
+  });
+
+  test('PATCH plan tags writes to the work account dir', async () => {
+    const res = await request(app)
+      .patch('/api/plans/work-plan.md/tags')
+      .send({ account: 'work', tags: ['tagged'] });
+    expect(res.status).toBe(200);
+    const written = fs.readFileSync(
+      path.join(workFixture.claudeDir, 'plans', 'work-plan.md'), 'utf8');
+    expect(written).toContain('"tagged"');
+  });
+
+  test('delete + restore round-trips to the correct account dir', async () => {
+    const del = await request(app).delete('/api/plans/work-plan.md?account=work');
+    expect(del.status).toBe(200);
+    expect(fs.existsSync(path.join(workFixture.claudeDir, 'plans', 'work-plan.md'))).toBe(false);
+
+    const trash = (await request(app).get('/api/trash')).body;
+    const item = trash.find(t => t.originalPath.includes('work-plan.md'));
+    expect(item).toBeDefined();
+
+    const restore = await request(app).post(`/api/trash/${encodeURIComponent(item.file)}/restore`);
+    expect(restore.status).toBe(200);
+    expect(fs.existsSync(path.join(workFixture.claudeDir, 'plans', 'work-plan.md'))).toBe(true);
   });
 });

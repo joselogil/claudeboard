@@ -310,12 +310,63 @@ function setupServer(name, extras = []) {
 }
 
 /**
+ * A minimal second-account fixture: one session + one plan with distinctive
+ * content so tests can tell it apart from the primary account.
+ */
+function workAccountFixture({ write }) {
+  const sessionLines = [
+    JSON.stringify({
+      type: 'system', subtype: 'turn_duration',
+      cwd: '/home/testuser/work/secret-work-project', gitBranch: 'main',
+      sessionId: 'work-999', version: '0.1.0', slug: 'work-session',
+    }),
+    JSON.stringify({
+      type: 'user', message: { content: 'Work account only session' },
+      timestamp: '2025-02-01T10:00:00.000Z',
+    }),
+  ];
+  write('projects/-home-testuser-work-secret-work-project/work-999.jsonl', sessionLines.join('\n'));
+  write('plans/work-plan.md', `---\ntags: ["work"]\n---\n# Work Only Plan\n\nWork account plan.\n`);
+}
+
+/**
+ * Sets up a server with TWO accounts (personal + work) via CLAUDEBOARD_ACCOUNTS.
+ * Returns { fixture, workFixture, app, accounts, TRASH_DIR }.
+ */
+function setupServerMultiAccount(name, extras = []) {
+  const fixture = createFixture(name, (...args) => {
+    sessionFixture(...args);
+    planFixture(...args);
+    memoryFixture(...args);
+    for (const fn of extras) fn(...args);
+  });
+  const workFixture = createFixture(name + '-work', (...args) => {
+    workAccountFixture(...args);
+  });
+
+  const TRASH_DIR = fs.mkdtempSync(path.join(fixture.tmpDir, 'trash-'));
+
+  process.env.CLAUDEBOARD_DATA_DIR = fixture.claudeDir;
+  process.env.CLAUDEBOARD_TRASH_DIR = TRASH_DIR;
+  process.env.CLAUDEBOARD_ACCOUNTS =
+    `personal:Personal:${fixture.claudeDir},work:Work:${workFixture.claudeDir}`;
+
+  delete require.cache[require.resolve('../server')];
+  delete require.cache[require.resolve('../scanner')];
+
+  const serverModule = require('../server');
+  return { fixture, workFixture, app: serverModule.createApp(), TRASH_DIR };
+}
+
+/**
  * Tears down the server test environment created by setupServer().
  */
-function teardownServer(fixture) {
+function teardownServer(fixture, workFixture) {
   fixture.cleanup();
+  if (workFixture) workFixture.cleanup();
   delete process.env.CLAUDEBOARD_DATA_DIR;
   delete process.env.CLAUDEBOARD_TRASH_DIR;
+  delete process.env.CLAUDEBOARD_ACCOUNTS;
   delete require.cache[require.resolve('../server')];
   delete require.cache[require.resolve('../scanner')];
 }
@@ -330,6 +381,8 @@ module.exports = {
   pluginFixture,
   orphanedProjectFixture,
   hyphenProjectFixture,
+  workAccountFixture,
   setupServer,
+  setupServerMultiAccount,
   teardownServer,
 };

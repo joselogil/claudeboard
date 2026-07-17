@@ -2,19 +2,41 @@
 
 const path = { basename: s => s.split('/').pop() };
 
+// Active account id (null until /api/accounts loads). Persisted in localStorage.
+let _account = null;
+
+// Append the active account as a query param. Skips endpoints that are
+// account-agnostic (meta, accounts, configs).
+function withAccount(endpoint) {
+  if (!_account || endpoint.startsWith('/meta') || endpoint.startsWith('/accounts') || endpoint.startsWith('/configs')) {
+    return endpoint;
+  }
+  return endpoint + (endpoint.includes('?') ? '&' : '?') + 'account=' + encodeURIComponent(_account);
+}
+
 const api = {
   async get(endpoint) {
-    const r = await fetch('/api' + endpoint);
+    const r = await fetch('/api' + withAccount(endpoint));
     if (!r.ok) throw new Error(`GET ${endpoint} failed: ${r.status}`);
     return r.json();
   },
   async post(endpoint, body) {
-    const r = await fetch('/api' + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    const r = await fetch('/api' + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account: _account, ...(body || {}) }) });
     if (!r.ok) throw new Error(`POST ${endpoint} failed: ${r.status}`);
     return r.json();
   },
+  async patch(endpoint, body) {
+    const r = await fetch('/api' + endpoint, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account: _account, ...(body || {}) }) });
+    if (!r.ok) throw new Error(`PATCH ${endpoint} failed: ${r.status}`);
+    return r.json();
+  },
+  async put(endpoint, body) {
+    const r = await fetch('/api' + endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account: _account, ...(body || {}) }) });
+    if (!r.ok) throw new Error(`PUT ${endpoint} failed: ${r.status}`);
+    return r.json();
+  },
   async delete(endpoint) {
-    const r = await fetch('/api' + endpoint, { method: 'DELETE' });
+    const r = await fetch('/api' + withAccount(endpoint), { method: 'DELETE' });
     if (!r.ok) throw new Error(`DELETE ${endpoint} failed: ${r.status}`);
     return r.json();
   },
@@ -112,6 +134,36 @@ document.querySelectorAll('.nav-link').forEach(a => {
 // Load server meta (homedir) once for portable path display
 api.get('/meta').then(meta => { _homedir = meta.homedir || null; });
 
+// The ~/.claude(-work) directory label for the active account, used in copy
+// strings (resume commands, plan/note paths).
+function claudeDirLabel() {
+  return _account === 'work' ? '~/.claude-work' : '~/.claude';
+}
+
+// Account switcher: load accounts, restore saved choice, wire the dropdown.
+async function initAccounts() {
+  let accounts = [];
+  try { accounts = await api.get('/accounts'); } catch { accounts = []; }
+  const sel = document.getElementById('account-switcher');
+  const wrap = document.getElementById('account-switcher-wrap');
+  if (!sel || accounts.length === 0) return;
+
+  const saved = localStorage.getItem('claudeboard.account');
+  _account = accounts.some(a => a.id === saved) ? saved : accounts[0].id;
+
+  sel.innerHTML = accounts.map(a => `<option value="${a.id}">${escHtml(a.label)}</option>`).join('');
+  sel.value = _account;
+  // Only show the switcher when there's a real choice.
+  wrap.hidden = accounts.length < 2;
+
+  sel.addEventListener('change', () => {
+    _account = sel.value;
+    localStorage.setItem('claudeboard.account', _account);
+    refreshSidebarStats();
+    navigate(currentView || 'overview');
+  });
+}
+
 function updateSidebarCounts(stats) {
   document.getElementById('cnt-sessions').textContent = stats.conversations.toLocaleString();
   document.getElementById('cnt-plans').textContent = stats.plans;
@@ -122,9 +174,6 @@ function updateSidebarCounts(stats) {
   document.getElementById('cnt-projects').textContent = stats.projects;
   window._stats = stats;
 }
-
-// Load stats once and update sidebar counts
-api.get('/stats').then(updateSidebarCounts);
 
 async function refreshSidebarStats() {
   try { updateSidebarCounts(await api.get('/stats')); } catch {}
@@ -337,11 +386,11 @@ async function openPlanModal(name) {
       </div>
       <div class="plan-cmd-block">
         <div class="conv-resume-block">
-          <code class="resume-cmd">load ~/.claude/plans/${escHtml(plan.name)}</code>
+          <code class="resume-cmd">load ${claudeDirLabel()}/plans/${escHtml(plan.name)}</code>
           <button class="btn-plan-cmd btn-copy-cmd" data-cmd="load" data-name="${escHtml(plan.name)}">Copy</button>
         </div>
         <div class="conv-resume-block">
-          <code class="resume-cmd">execute ~/.claude/plans/${escHtml(plan.name)}</code>
+          <code class="resume-cmd">execute ${claudeDirLabel()}/plans/${escHtml(plan.name)}</code>
           <button class="btn-plan-cmd btn-copy-cmd" data-cmd="execute" data-name="${escHtml(plan.name)}">Copy</button>
         </div>
       </div>
@@ -350,7 +399,7 @@ async function openPlanModal(name) {
   `);
   document.querySelectorAll('.btn-plan-cmd').forEach(btn => {
     btn.addEventListener('click', () => {
-      copyText(`${btn.dataset.cmd} ~/.claude/plans/${btn.dataset.name}`, btn);
+      copyText(`${btn.dataset.cmd} ${claudeDirLabel()}/plans/${btn.dataset.name}`, btn);
     });
   });
   } catch (err) {
@@ -367,8 +416,10 @@ function copyText(text, triggerEl) {
 }
 
 function copyResume(sessionId, triggerEl, projectPath) {
-  const prefix = projectPath ? `cd ${projectPath} && ` : '';
-  copyText(`${prefix}claude --resume ${sessionId}`, triggerEl);
+  const cd = projectPath ? `cd ${projectPath} && ` : '';
+  // Work account lives in an alternate config dir; point Claude Code at it.
+  const env = _account === 'work' ? 'CLAUDE_CONFIG_DIR=~/.claude-work ' : '';
+  copyText(`${cd}${env}claude --resume ${sessionId}`, triggerEl);
 }
 
 async function openSessionModal(project, sessionId) {
@@ -547,7 +598,7 @@ async function renderPlans(container) {
   container.querySelectorAll('.btn-load-plan').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      copyText(`${btn.dataset.cmd} ~/.claude/plans/${btn.dataset.planName}`, btn);
+      copyText(`${btn.dataset.cmd} ${claudeDirLabel()}/plans/${btn.dataset.planName}`, btn);
     });
   });
 
@@ -615,17 +666,12 @@ function openTagEditor(tagArea) {
   });
 
   editor.querySelector('.tag-save-btn').addEventListener('click', async () => {
-    const r = await fetch('/api/plans/' + encodeURIComponent(planName) + '/tags', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tags }),
-    });
-    const result = await r.json();
-    if (result.ok) {
+    try {
+      const result = await api.patch('/plans/' + encodeURIComponent(planName) + '/tags', { tags });
       tagArea.dataset.tags = JSON.stringify(result.tags);
       tagArea.innerHTML = renderTagChips(result.tags, planName);
-    } else {
-      alert('Save failed: ' + result.error);
+    } catch (err) {
+      alert('Save failed: ' + err.message);
     }
   });
 
@@ -696,7 +742,7 @@ async function renderNotes(container) {
             <div class="plan-footer">
               <span class="plan-meta">${fmtBytes(n.size)} · ${n.date || shortDate(n.mtime)}</span>
               <div class="plan-footer-btns">
-                <button class="btn-load-plan btn-copy-note-path-card" data-note-path="~/.claude/notes/${escHtml(n.name)}" title="Copy path">Copy path</button>
+                <button class="btn-load-plan btn-copy-note-path-card" data-note-path="${claudeDirLabel()}/notes/${escHtml(n.name)}" title="Copy path">Copy path</button>
               </div>
             </div>
           </div>
@@ -811,17 +857,12 @@ function openNoteTagEditor(tagArea) {
   });
 
   editor.querySelector('.tag-save-btn').addEventListener('click', async () => {
-    const r = await fetch('/api/notes/' + encodeURIComponent(noteName) + '/tags', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tags }),
-    });
-    const result = await r.json();
-    if (result.ok) {
+    try {
+      const result = await api.patch('/notes/' + encodeURIComponent(noteName) + '/tags', { tags });
       tagArea.dataset.tags = JSON.stringify(result.tags);
       tagArea.innerHTML = renderTagChips(result.tags, noteName);
-    } else {
-      alert('Save failed: ' + result.error);
+    } catch (err) {
+      alert('Save failed: ' + err.message);
     }
   });
 
@@ -836,7 +877,7 @@ async function openNoteModal(name) {
   try {
     openModal('<div class="loading">Loading note...</div>');
     const note = await api.get('/notes/' + encodeURIComponent(name));
-    const notePath = `~/.claude/notes/${note.name}`;
+    const notePath = `${claudeDirLabel()}/notes/${note.name}`;
     openModal(`
       <div class="conv-modal-header">
         <div>
@@ -1339,7 +1380,7 @@ views.settings = async function(container) {
   container.innerHTML = `
     <div class="section-header">
       <h2>Settings</h2>
-      <p>~/.claude/settings.json — read-only view</p>
+      <p>${claudeDirLabel()}/settings.json — read-only view</p>
     </div>
     <div class="json-view">${escHtml(JSON.stringify(settings, null, 2))}</div>
   `;
@@ -1505,4 +1546,9 @@ function routeFromHash() {
 }
 
 window.addEventListener('hashchange', routeFromHash);
-routeFromHash();
+
+// Resolve the active account before the first data load, then boot.
+initAccounts().then(() => {
+  api.get('/stats').then(updateSidebarCounts).catch(() => {});
+  routeFromHash();
+});
