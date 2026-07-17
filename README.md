@@ -14,6 +14,7 @@ Claude Code writes a lot of data to `~/.claude/` — session transcripts, plan f
 - Manage plans with tag filtering and inline tag editing
 - Read and edit all CLAUDE.md config files across your projects
 - View memories, tasks, plugins, and settings
+- Switch between multiple Claude data directories (e.g. personal vs. work) from a sidebar dropdown
 
 ## Requirements
 
@@ -55,12 +56,23 @@ All configuration is via environment variables:
 | `CLAUDEBOARD_DATA_DIR` | `~/.claude` | Directory containing Claude Code data |
 | `CLAUDEBOARD_TRASH_DIR` | `~/.claude/dashboard/trash` | Where deleted items are moved |
 | `CLAUDEBOARD_SCAN_ROOTS` | _(none)_ | Colon-separated extra directories to scan for CLAUDE.md config files, in addition to `$HOME` |
+| `CLAUDEBOARD_ACCOUNTS` | _(auto-detected)_ | Comma-separated `id:Label:/path` triples defining the accounts shown in the account switcher (see below) |
 
 Example:
 
 ```bash
 PORT=8080 CLAUDEBOARD_SCAN_ROOTS="/work/projects:/opt/dev" node server.js
 ```
+
+## Multi-Account
+
+Claudeboard can browse more than one Claude data directory, switchable from a dropdown at the top of the sidebar. By default it auto-detects `personal` (`~/.claude`) and `work` (`~/.claude-work`), showing only the ones that exist. Override the list with:
+
+```bash
+CLAUDEBOARD_ACCOUNTS="personal:Personal:/home/alice/.claude,work:Work:/home/alice/.claude-work" node server.js
+```
+
+Trash and config files are shared across accounts — trashed items restore to their original account automatically, and CLAUDE.md/AGENTS.md files are discovered by scanning the home directory tree regardless of which account is active.
 
 ## Plan Auto-Tagging Hook
 
@@ -110,7 +122,7 @@ Example: if your cwd is `/home/alice/work/myproject`, the plan gets tagged `["wo
 
 ## Architecture
 
-No build step. Vanilla HTML/CSS/JS frontend with hash-based routing. All data is read live from `~/.claude/` on each request, except `scanProjectDirs()` which caches for 60 seconds.
+No build step. Vanilla HTML/CSS/JS frontend with hash-based routing. All data is read live from the active account's data directory on each request, except `scanProjectDirs()` which caches for 60 seconds per account.
 
 ```
 ~/.claude/dashboard/
